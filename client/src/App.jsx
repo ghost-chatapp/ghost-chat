@@ -880,7 +880,7 @@ function ChatApp({
             )}
             {friends.map(f => (
               <div
-                key={f.friend_code}
+                key={f.account_code}
                 className={`friend-item ${activeChat?.accountCode === f.friend_code ? 'active' : ''}`}
                 onClick={() => onOpenChat({ accountCode: f.friend_code })}
               >
