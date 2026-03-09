@@ -11,7 +11,7 @@ router.get('/', authenticate, async (req, res) => {
   try {
     const result = await db.query(
       `SELECT 
-         CASE WHEN account_code_1 = $1 THEN account_code_2 ELSE account_code_1 END AS friend_code,
+         CASE WHEN account_code_1 = $1 THEN account_code_2 ELSE account_code_1 END AS account_code,
          status,
          created_at
        FROM friends
