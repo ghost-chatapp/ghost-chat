@@ -11,9 +11,14 @@ import { authenticate } from '../middleware/auth.js';
 
 const router = Router();
 
-// Cryptographically secure random code generator
-function generateCode(bytes = 8) {
-  return randomBytes(bytes).toString('base64url');
+// Cryptographically secure random code generators — always different formats
+function generateAccountCode() {
+  // Long hex string: ac_<16 hex chars>
+  return 'ac_' + randomBytes(8).toString('hex');
+}
+function generateFriendCode() {
+  // Short base64url: gc_<8 chars>
+  return 'gc_' + randomBytes(6).toString('base64url');
 }
 
 // ── GET /auth/pow-challenge ──────────────────────────────────────────────────
@@ -66,18 +71,25 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ error: 'Password must be at least 8 characters' });
     }
 
-    // 4. Generate account code and friend code
-    const accountCode = generateCode(8);   // unique identifier
-    const friendCode = generateCode(6);    // sharable friend code, shorter
+    // 3b. Validate display name
+    const rawName = req.body.displayName || '';
+    const displayName = rawName.trim().slice(0, 24) || null;
+    if (displayName && !/^[a-zA-Z0-9 _\-\.]+$/.test(displayName)) {
+      return res.status(400).json({ error: 'Display name can only contain letters, numbers, spaces, _ - .' });
+    }
+
+    // 4. Generate account code and friend code — always distinct formats
+    const accountCode = generateAccountCode();  // ac_<16 hex> — private login ID
+    const friendCode = generateFriendCode();    // gc_<8 b64url> — shareable
 
     // 5. Hash password
     const passwordHash = await bcrypt.hash(password, 12);
 
     // 6. Insert into DB
     await db.query(
-      `INSERT INTO accounts (account_code, friend_code, password_hash, created_at)
-       VALUES ($1, $2, $3, NOW())`,
-      [accountCode, friendCode, passwordHash]
+      `INSERT INTO accounts (account_code, friend_code, password_hash, display_name, created_at)
+       VALUES ($1, $2, $3, $4, NOW())`,
+      [accountCode, friendCode, passwordHash, displayName]
     );
 
     // 7. Issue tokens
@@ -304,6 +316,44 @@ router.post('/rotate-keys', authenticate, async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: 'Key rotation failed' });
+  }
+});
+
+// ── POST /auth/set-display-name ──────────────────────────────────────────────
+router.post('/set-display-name', authenticate, async (req, res) => {
+  try {
+    const { displayName } = req.body;
+    if (!displayName || typeof displayName !== 'string') {
+      return res.status(400).json({ error: 'Missing display name' });
+    }
+    const trimmed = displayName.trim();
+    if (trimmed.length < 2 || trimmed.length > 32) {
+      return res.status(400).json({ error: 'Display name must be 2–32 characters' });
+    }
+    if (!/^[\w\s\-_.]+$/.test(trimmed)) {
+      return res.status(400).json({ error: 'Display name contains invalid characters' });
+    }
+    await db.query(
+      'UPDATE accounts SET display_name = $1 WHERE account_code = $2',
+      [trimmed, req.user.accountCode]
+    );
+    res.json({ ok: true, displayName: trimmed });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to set display name' });
+  }
+});
+
+// ── GET /auth/me ─────────────────────────────────────────────────────────────
+router.get('/me', authenticate, async (req, res) => {
+  try {
+    const result = await db.query(
+      'SELECT account_code, friend_code, display_name FROM accounts WHERE account_code = $1',
+      [req.user.accountCode]
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: 'Account not found' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to get account' });
   }
 });
 
