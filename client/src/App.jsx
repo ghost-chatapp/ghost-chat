@@ -944,7 +944,9 @@ function ChatApp({
       {/* Main content */}
       <div className="main">
         {activeTab === 'world' ? (
-          <WorldChat messages={worldMessages} onSend={() => {}} />
+          <WorldChat messages={worldMessages} onSend={async (content) => {
+           await sendWorldMessage(content);
+           }} />
         ) : activeChat ? (
           <>
             {/* Chat header */}
