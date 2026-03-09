@@ -1,12 +1,13 @@
 -- Ghost Chat Database Schema v2.0
 -- Run this in your Supabase SQL editor or psql
 
--- Accounts table (no usernames, only codes)
+-- Accounts table
 CREATE TABLE IF NOT EXISTS accounts (
   id                  SERIAL PRIMARY KEY,
   account_code        VARCHAR(64) UNIQUE NOT NULL,
   friend_code         VARCHAR(32) UNIQUE NOT NULL,
   password_hash       VARCHAR(128) NOT NULL,
+  display_name        VARCHAR(24),
   decoy_password_hash VARCHAR(128),
   public_key          VARCHAR(256),
   is_banned           BOOLEAN DEFAULT FALSE,
@@ -94,3 +95,5 @@ CREATE TABLE IF NOT EXISTS reports (
   resolved_at   TIMESTAMP,
   created_at    TIMESTAMP NOT NULL DEFAULT NOW()
 );
+-- Migration: add display_name if upgrading from old schema
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS display_name VARCHAR(24);
