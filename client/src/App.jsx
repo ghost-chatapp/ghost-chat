@@ -20,6 +20,7 @@ import {
   getPendingRequests, getWorldMessages, sendWorldMessage,
   drainInbox, sendMessage, sendVoiceMessage as apiSendVoice,
   recallMessage as apiRecall, setTokens, clearTokens, copyWithAutoClear,
+  setDisplayName, getMe,
 } from './api.js';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
@@ -76,6 +77,8 @@ export default function App() {
   const [loginHistory, setLoginHistory] = useState([]);
   const [powSolving, setPowSolving] = useState(false);
   const [isDecoySession, setIsDecoySession] = useState(false);
+  const [displayName, setDisplayName_] = useState('');
+  const [showNamePicker, setShowNamePicker] = useState(false);
 
   const socketRef = useRef(null);
   const lockTimerRef = useRef(null);
@@ -105,6 +108,9 @@ export default function App() {
         accountCodeRef.current = savedCode;
         setFriendCode(savedFriendCode);
         setKeys(importKeyPair(savedKeys));
+        // Load saved display name
+        const savedName = await getSetting('displayName');
+        if (savedName) setDisplayName_(savedName);
         setScreen('login');
       } else {
         setScreen('welcome');
@@ -157,6 +163,7 @@ export default function App() {
     const msg = {
       id: envelope.id,
       from: envelope.from,
+      displayName: envelope.displayName || null,
       content: typeof decrypted === 'string' ? decrypted : decrypted.content,
       selfDestructSeconds: envelope.selfDestructSeconds,
       selfDestructAt: envelope.selfDestructSeconds
@@ -280,6 +287,7 @@ export default function App() {
       connectSocket(result.accessToken);
       setScreen('app');
       setMascotMood(MOODS.HAPPY);
+      setShowNamePicker(true); // prompt new user to pick a name
       if (result.warning) showNotification(result.warning, 'warning');
     } catch (err) {
       showNotification(err.message, 'error');
@@ -317,6 +325,15 @@ export default function App() {
       setPendingRequests(requests);
       const history = await getLoginHistory();
       setLoginHistory(history);
+
+      // Load display name
+      try {
+        const me = await getMe();
+        if (me.display_name) {
+          setDisplayName_(me.display_name);
+          await setSetting('displayName', me.display_name);
+        }
+      } catch {}
 
       if (result.decoy) {
         setIsDecoySession(true);
@@ -522,6 +539,20 @@ export default function App() {
     setMascotMood(MOODS.HAPPY);
   };
 
+  // ── Set display name ───────────────────────────────────────────────────────
+  const handleSetDisplayName = async (name) => {
+    try {
+      await setDisplayName(name);
+      setDisplayName_(name);
+      await setSetting('displayName', name);
+      socketRef.current?.emit('update_display_name', name);
+      setShowNamePicker(false);
+      showNotification(`Name set to "${name}"`, 'info');
+    } catch (err) {
+      showNotification(err.message, 'error');
+    }
+  };
+
   // ── Panic / logout ─────────────────────────────────────────────────────────
   const handlePanic = async () => {
     socketRef.current?.emit('panic');
@@ -605,9 +636,23 @@ export default function App() {
         notification={notification}
         loginHistory={loginHistory}
         keys={keys}
+        displayName={displayName}
+        showNamePicker={showNamePicker}
+        onSetDisplayName={handleSetDisplayName}
+        onDismissNamePicker={() => setShowNamePicker(false)}
         onSendWorld={async (content) => {
-          try { await sendWorldMessage(content); }
-          catch (err) { showNotification(err.message, 'error'); }
+          try {
+            // Optimistic update — tag as mine so it shows on right side immediately
+            const optimistic = {
+              id: crypto.randomUUID(),
+              content,
+              display_name: displayName || 'Ghost',
+              ts: Date.now(),
+              isMine: true,
+            };
+            setWorldMessages(prev => [...prev.slice(-99), optimistic]);
+            await sendWorldMessage(content);
+          } catch (err) { showNotification(err.message, 'error'); }
         }}
       />
     );
@@ -858,7 +903,7 @@ function ChatApp({
   onCopyCode, minimalMode, onToggleMinimal,
   isDecoySession, onAddFriend, onAcceptRequest, onRejectRequest,
   notification, loginHistory, keys, setFriends,
-  onSendWorld,
+  onSendWorld, displayName, showNamePicker, onSetDisplayName, onDismissNamePicker,
 }) {
   const [addFriendCode, setAddFriendCode] = useState('');
   const [showAddFriend, setShowAddFriend] = useState(false);
@@ -893,6 +938,14 @@ function ChatApp({
     <div className="app">
       {notification && (
         <div className={`notification notification-${notification.type}`}>{notification.message}</div>
+      )}
+
+      {showNamePicker && (
+        <NamePickerModal
+          current={displayName}
+          onSave={onSetDisplayName}
+          onSkip={onDismissNamePicker}
+        />
       )}
 
       {fingerprintTarget && (
@@ -1014,7 +1067,7 @@ function ChatApp({
 
       <div className="main">
         {activeTab === 'world' ? (
-          <WorldChat messages={worldMessages} onSend={onSendWorld} />
+          <WorldChat messages={worldMessages} onSend={onSendWorld} myDisplayName={displayName} />
         ) : activeTab === 'chats' && activeChat ? (
           <>
             <div className="chat-header">
@@ -1087,6 +1140,11 @@ function MessageBubble({ msg, isMine, onRecall }) {
 
   return (
     <div className={`message ${isMine ? 'mine' : 'theirs'}`}>
+      {!isMine && (
+        <div style={{ fontSize: 10, color: '#9b8fc8', fontFamily: 'monospace', marginBottom: 3 }}>
+          {msg.displayName || msg.from?.slice(0, 8) + '...'}
+        </div>
+      )}
       <div className="message-content">{msg.content}</div>
       <div className="message-meta">
         {timeLeft && <span style={{ color: '#f90', marginRight: 6 }}>💣 {timeLeft}s</span>}
@@ -1106,7 +1164,7 @@ function MessageBubble({ msg, isMine, onRecall }) {
   );
 }
 
-function WorldChat({ messages, onSend }) {
+function WorldChat({ messages, onSend, myDisplayName }) {
   const [input, setInput] = useState('');
   const endRef = useRef(null);
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
@@ -1120,12 +1178,22 @@ function WorldChat({ messages, onSend }) {
         </div>
       </div>
       <div className="messages">
-        {messages.map((msg, i) => (
-          <div key={msg.id || i} className="message theirs">
-            <div className="message-content">{msg.content}</div>
-            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', marginTop: 2 }}>{new Date(msg.ts || msg.created_at).toLocaleTimeString()}</div>
-          </div>
-        ))}
+        {messages.map((msg, i) => {
+          const isMine = !!msg.isMine;
+          return (
+            <div key={msg.id || i} className={`message ${isMine ? 'mine' : 'theirs'}`}>
+              {!isMine && (
+                <div style={{ fontSize: 10, color: '#9b8fc8', fontFamily: 'monospace', marginBottom: 3 }}>
+                  👻 {msg.display_name || 'Ghost'}
+                </div>
+              )}
+              <div className="message-content">{msg.content}</div>
+              <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', marginTop: 2 }}>
+                {new Date(msg.ts || msg.created_at).toLocaleTimeString()}
+              </div>
+            </div>
+          );
+        })}
         <div ref={endRef} />
       </div>
       <div className="input-area">
