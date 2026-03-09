@@ -157,6 +157,13 @@ export default function App() {
       setMessages(prev => prev.filter(m => m.id !== messageId));
       deleteMessage(messageId);
     });
+    socket.on('friend_request', ({ from }) => {
+      setPendingRequests(prev => {
+        if (prev.find(r => r.requester_code === from)) return prev;
+        return [{ requester_code: from, created_at: new Date().toISOString() }, ...prev];
+      });
+      showNotification('New friend request received', 'info');
+    });
     socket.on('delivery_receipt', ({ messageId, status }) => {
       setMessages(prev => prev.map(m => m.id === messageId ? { ...m, status } : m));
     });
@@ -451,8 +458,34 @@ export default function App() {
     }, 1500);
   };
 
+  // ── Friend request: accept ─────────────────────────────────────────────────
+  const handleAcceptRequest = async (requesterCode) => {
+    try {
+      await acceptFriend(requesterCode);
+      setPendingRequests(prev => prev.filter(r => r.requester_code !== requesterCode));
+      const { friends: fl } = await getFriends();
+      setFriends(fl);
+      showNotification('Friend request accepted', 'info');
+    } catch (err) {
+      showNotification(err.message, 'error');
+    }
+  };
+
+  // ── Friend request: reject ─────────────────────────────────────────────────
+  const handleRejectRequest = async (requesterCode) => {
+    try {
+      await removeFriend(requesterCode); // uses DELETE /friends/:code which handles pending too
+      setPendingRequests(prev => prev.filter(r => r.requester_code !== requesterCode));
+      showNotification('Request declined', 'info');
+    } catch (err) {
+      showNotification(err.message, 'error');
+    }
+  };
+
   const openChat = async (friend) => {
+    if (!friend) { setActiveChat(null); setMessages([]); return; }
     setActiveChat(friend);
+    setActiveTab('chats');
     const msgs = await getMessages(friend.accountCode);
     setMessages(msgs);
     socketRef.current?.emit('join_group', friend.accountCode);
@@ -562,6 +595,8 @@ export default function App() {
           const { friends: fl } = await getFriends();
           setFriends(fl);
         }}
+        onAcceptRequest={handleAcceptRequest}
+        onRejectRequest={handleRejectRequest}
         notification={notification}
         loginHistory={loginHistory}
         keys={keys}
@@ -1120,7 +1155,7 @@ function ChatApp({
   pendingRequests, onPanic, onLogout,
   onShowFingerprint, fingerprintTarget, onCloseFP,
   onCopyCode, minimalMode, onToggleMinimal,
-  isDecoySession, onAddFriend,
+  isDecoySession, onAddFriend, onAcceptRequest, onRejectRequest,
   notification, loginHistory, keys, setFriends,
   onSendWorld,
 }) {
@@ -1196,14 +1231,59 @@ function ChatApp({
               key={tab}
               onClick={() => onTabChange(tab)}
               className={`tab-btn ${activeTab === tab ? 'active' : ''}`}
+              style={{ position: 'relative' }}
             >
               {tab === 'chats' ? '💬' : tab === 'world' ? '🌐' : '⚙️'}
+              {tab === 'chats' && pendingRequests.length > 0 && (
+                <span style={{
+                  position: 'absolute', top: 4, right: 4,
+                  width: 8, height: 8, borderRadius: '50%',
+                  background: '#f90', boxShadow: '0 0 6px rgba(255,150,0,0.8)',
+                }} />
+              )}
             </button>
           ))}
         </div>
 
         {activeTab === 'chats' && (
           <div className="friend-list">
+            {/* ── Pending requests ── */}
+            {pendingRequests.length > 0 && (
+              <div style={{ borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: 8, marginBottom: 4 }}>
+                <div style={{ padding: '8px 12px 4px', fontSize: 10, fontFamily: 'monospace', color: 'rgba(255,180,80,0.7)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+                  Requests ({pendingRequests.length})
+                </div>
+                {pendingRequests.map(r => (
+                  <div key={r.requester_code} style={{
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    padding: '8px 12px',
+                    background: 'rgba(255,160,40,0.05)',
+                    borderLeft: '2px solid rgba(255,160,40,0.3)',
+                    margin: '2px 0',
+                  }}>
+                    <GhostMascot mood={MOODS.IDLE} size={28} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 11, fontFamily: 'monospace', color: '#ccc', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {r.requester_code.slice(0, 10)}...
+                      </div>
+                      <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)' }}>wants to connect</div>
+                    </div>
+                    <button
+                      title="Accept"
+                      onClick={() => onAcceptRequest(r.requester_code)}
+                      style={{ background: 'rgba(80,200,100,0.15)', border: '1px solid rgba(80,200,100,0.35)', borderRadius: 6, color: '#6f6', fontSize: 14, width: 28, height: 28, cursor: 'pointer', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                    >✓</button>
+                    <button
+                      title="Decline"
+                      onClick={() => onRejectRequest(r.requester_code)}
+                      style={{ background: 'rgba(200,60,60,0.12)', border: '1px solid rgba(200,60,60,0.3)', borderRadius: 6, color: '#f88', fontSize: 14, width: 28, height: 28, cursor: 'pointer', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                    >✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* ── Add friend ── */}
             <button
               className="btn-ghost"
               style={{ margin: '8px 12px', fontSize: 13 }}
@@ -1229,6 +1309,13 @@ function ChatApp({
                 >
                   Send Request
                 </button>
+              </div>
+            )}
+
+            {/* ── Friends list ── */}
+            {friends.length > 0 && (
+              <div style={{ padding: '4px 12px 2px', fontSize: 10, fontFamily: 'monospace', color: 'rgba(255,255,255,0.25)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+                Friends ({friends.length})
               </div>
             )}
             {friends.map(f => (
@@ -1257,9 +1344,9 @@ function ChatApp({
                 </button>
               </div>
             ))}
-            {friends.length === 0 && (
+            {friends.length === 0 && pendingRequests.length === 0 && (
               <p style={{ color: 'rgba(255,255,255,0.25)', fontSize: 13, padding: '16px', textAlign: 'center' }}>
-                No friends yet. Share your friend code.
+                No friends yet.<br />Share your friend code to connect.
               </p>
             )}
           </div>
@@ -1297,7 +1384,7 @@ function ChatApp({
       <div className="main">
         {activeTab === 'world' ? (
           <WorldChat messages={worldMessages} onSend={onSendWorld} />
-        ) : activeChat ? (
+        ) : activeTab === 'chats' && activeChat ? (
           <>
             <div className="chat-header">
               <GhostMascot mood={onlineUsers.has(activeChat.accountCode) ? MOODS.HAPPY : MOODS.IDLE} size={36} />
@@ -1309,8 +1396,19 @@ function ChatApp({
                   E2E Encrypted · Local storage only
                 </div>
               </div>
+              <button
+                title="Close chat"
+                onClick={() => onOpenChat(null)}
+                style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.25)', fontSize: 18, cursor: 'pointer', padding: '4px 8px' }}
+              >×</button>
             </div>
             <div className="messages">
+              {messages.length === 0 && (
+                <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.2)', fontSize: 13, padding: '40px 20px' }}>
+                  <div style={{ fontSize: 32, marginBottom: 8 }}>👻</div>
+                  No messages yet. Say hello!
+                </div>
+              )}
               {messages.map(msg => (
                 <MessageBubble
                   key={msg.id}
@@ -1356,7 +1454,7 @@ function ChatApp({
             </div>
           </>
         ) : (
-          <EmptyState />
+          <EmptyState hasFriends={friends.length > 0} hasPending={pendingRequests.length > 0} />
         )}
       </div>
     </div>
@@ -1520,11 +1618,26 @@ function ToggleSetting({ label, sublabel, value, onChange }) {
   );
 }
 
-function EmptyState() {
+function EmptyState({ hasFriends, hasPending }) {
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.2)' }}>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.2)', padding: '2rem', textAlign: 'center' }}>
       <GhostMascot mood={MOODS.SLEEPING} size={80} />
-      <p style={{ marginTop: 16 }}>Select a conversation</p>
+      {hasPending ? (
+        <>
+          <p style={{ marginTop: 16, fontSize: 14, color: 'rgba(255,200,100,0.5)' }}>You have pending friend requests</p>
+          <p style={{ marginTop: 4, fontSize: 12 }}>Check the 💬 chats tab to accept them</p>
+        </>
+      ) : hasFriends ? (
+        <>
+          <p style={{ marginTop: 16, fontSize: 14 }}>Select a conversation</p>
+          <p style={{ marginTop: 4, fontSize: 12 }}>Choose a friend from the sidebar to start chatting</p>
+        </>
+      ) : (
+        <>
+          <p style={{ marginTop: 16, fontSize: 14 }}>No conversations yet</p>
+          <p style={{ marginTop: 4, fontSize: 12 }}>Add a friend using their friend code to get started</p>
+        </>
+      )}
     </div>
   );
 }
