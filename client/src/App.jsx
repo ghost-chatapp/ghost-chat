@@ -134,7 +134,6 @@ export default function App() {
       setOnlineUsers(prev => { const s = new Set(prev); s.delete(ac); return s; });
     });
     socket.on('typing_start', ({ from }) => {
-      // Show typing indicator for active chat
       if (activeChat?.accountCode === from) {
         setMascotMood(MOODS.TYPING);
       }
@@ -232,7 +231,6 @@ export default function App() {
     setPowSolving(true);
     setMascotMood(MOODS.TYPING);
     try {
-      // Get PoW challenge and solve it
       const challenge = await getPoWChallenge();
       showNotification('Solving security puzzle...', 'info');
 
@@ -245,7 +243,6 @@ export default function App() {
         challenge.timestamp
       );
 
-      // Generate E2E keypair
       const kp = generateKeyPair();
       const exported = exportKeyPair(kp);
 
@@ -255,6 +252,8 @@ export default function App() {
       await logLogin();
 
       setTokens(result.accessToken, result.refreshToken);
+      // FIX (Bug 4): persist access token so unlock can reconnect socket
+      await setSetting('accessToken', result.accessToken);
       await setPublicKey(exported.publicKey);
 
       setAccountCode(result.accountCode);
@@ -281,6 +280,8 @@ export default function App() {
     try {
       const result = await login(code, password);
       setTokens(result.accessToken, result.refreshToken);
+      // FIX (Bug 4): persist access token so unlock can reconnect socket
+      await setSetting('accessToken', result.accessToken);
 
       const savedKeys = await getKeys();
       if (!savedKeys) throw new Error('Keys not found. This may not be your device.');
@@ -294,6 +295,12 @@ export default function App() {
 
       await logLogin();
 
+      // FIX (Bug 5): load pending requests and login history
+      const { requests } = await getPendingRequests();
+      setPendingRequests(requests);
+      const history = await getLoginHistory();
+      setLoginHistory(history);
+
       if (result.decoy) {
         setIsDecoySession(true);
         setScreen('app');
@@ -305,15 +312,12 @@ export default function App() {
       setScreen('app');
       setMascotMood(MOODS.HAPPY);
 
-      // Load friends
       const { friends: fl } = await getFriends();
       setFriends(fl);
 
-      // Load world messages
       const { messages: wm } = await getWorldMessages();
       setWorldMessages(wm);
 
-      // Check key rotation
       const savedKeysData = await getKeys();
       if (shouldRotateKeys(savedKeysData?.savedAt)) {
         handleKeyRotation(kp);
@@ -381,7 +385,6 @@ export default function App() {
     setMessages(prev => [...prev, msg]);
     setInputText('');
 
-    // Start recall timer (10 seconds)
     recallTimersRef.current.set(msgId, null);
     setTimeout(() => {
       recallTimersRef.current.delete(msgId);
@@ -466,9 +469,10 @@ export default function App() {
       duration: 0,
     });
 
+    // FIX (Bug 6): pass encrypted object directly, not JSON.stringify
     await apiSendVoice(
       activeChat.accountCode,
-      JSON.stringify(encrypted),
+      encrypted,
       0
     );
   };
@@ -522,6 +526,7 @@ export default function App() {
   const handleLogout = async () => {
     try { await apiLogout(); } catch {}
     clearTokens();
+    await setSetting('accessToken', null);
     socketRef.current?.disconnect();
     setScreen('login');
     setMascotMood(MOODS.IDLE);
@@ -604,6 +609,13 @@ export default function App() {
         notification={notification}
         loginHistory={loginHistory}
         keys={keys}
+        onSendWorld={async (content) => {
+          try {
+            await sendWorldMessage(content);
+          } catch (err) {
+            showNotification(err.message, 'error');
+          }
+        }}
       />
     );
   }
@@ -757,6 +769,7 @@ function ChatApp({
   onCopyCode, minimalMode, onToggleMinimal,
   isDecoySession, onAddFriend,
   notification, loginHistory, keys, setFriends,
+  onSendWorld,
 }) {
   const [addFriendCode, setAddFriendCode] = useState('');
   const [showAddFriend, setShowAddFriend] = useState(false);
@@ -889,16 +902,16 @@ function ChatApp({
                 </div>
                 <div className="friend-info">
                   <span style={{ fontSize: 12, fontFamily: 'monospace', color: '#ccd' }}>
-                    {f.friend_code.slice(0, 8)}...
+                    {f.account_code.slice(0, 8)}...
                   </span>
                   <span style={{ fontSize: 11, color: onlineUsers.has(f.account_code) ? '#6f6' : 'rgba(255,255,255,0.3)' }}>
-                     {onlineUsers.has(f.account_code) ? 'Online' : 'Offline'}
+                    {onlineUsers.has(f.account_code) ? 'Online' : 'Offline'}
                   </span>
                 </div>
                 <button
                   className="fp-btn"
                   title="Verify key fingerprint"
-                  onClick={e => { e.stopPropagation(); onShowFingerprint(f.friend_code); }}
+                  onClick={e => { e.stopPropagation(); onShowFingerprint(f.account_code); }}
                 >
                   🔑
                 </button>
@@ -944,9 +957,7 @@ function ChatApp({
       {/* Main content */}
       <div className="main">
         {activeTab === 'world' ? (
-          <WorldChat messages={worldMessages} onSend={async (content) => {
-           await sendWorldMessage(content);
-           }} />
+          <WorldChat messages={worldMessages} onSend={onSendWorld} />
         ) : activeChat ? (
           <>
             {/* Chat header */}
