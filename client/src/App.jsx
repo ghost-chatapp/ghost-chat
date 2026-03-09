@@ -881,18 +881,18 @@ function ChatApp({
             {friends.map(f => (
               <div
                 key={f.account_code}
-                className={`friend-item ${activeChat?.accountCode === f.friend_code ? 'active' : ''}`}
-                onClick={() => onOpenChat({ accountCode: f.friend_code })}
+                className={`friend-item ${activeChat?.accountCode === f.account_code ? 'active' : ''}`}
+                onClick={() => onOpenChat({ accountCode: f.account_code })}
               >
                 <div className="friend-avatar">
-                  <GhostMascot mood={onlineUsers.has(f.friend_code) ? MOODS.HAPPY : MOODS.SLEEPING} size={32} />
+                  <GhostMascot mood={onlineUsers.has(f.account_code) ? MOODS.HAPPY : MOODS.SLEEPING} size={32} />
                 </div>
                 <div className="friend-info">
                   <span style={{ fontSize: 12, fontFamily: 'monospace', color: '#ccd' }}>
                     {f.friend_code.slice(0, 8)}...
                   </span>
-                  <span style={{ fontSize: 11, color: onlineUsers.has(f.friend_code) ? '#6f6' : 'rgba(255,255,255,0.3)' }}>
-                    {onlineUsers.has(f.friend_code) ? 'Online' : 'Offline'}
+                  <span style={{ fontSize: 11, color: onlineUsers.has(f.account_code) ? '#6f6' : 'rgba(255,255,255,0.3)' }}>
+                     {onlineUsers.has(f.account_code) ? 'Online' : 'Offline'}
                   </span>
                 </div>
                 <button
