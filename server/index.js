@@ -83,12 +83,25 @@ function socketRateLimit(socketId, event, limit = 10, windowMs = 10000) {
   return state.count <= limit;
 }
 
-io.on('connection', (socket) => {
+io.on('connection', async (socket) => {
   const accountCode = socket.accountCode;
   if (!accountCode) return socket.disconnect();
 
+  // Load display name for this socket session
+  try {
+    const r = await db.query('SELECT display_name FROM accounts WHERE account_code = $1', [accountCode]);
+    socket.displayName = r.rows[0]?.display_name || 'Ghost';
+  } catch { socket.displayName = 'Ghost'; }
+
   // Register presence
   onlineUsers.set(accountCode, socket.id);
+
+  // Update display name on socket when changed
+  socket.on('update_display_name', (name) => {
+    if (typeof name === 'string' && name.length <= 32) {
+      socket.displayName = name.trim() || 'Ghost';
+    }
+  });
 
   // Ghost mode: don't broadcast presence if enabled
   socket.on('set_ghost_mode', (enabled) => {
@@ -118,6 +131,7 @@ io.on('connection', (socket) => {
       io.to(recipientSocketId).emit('private_message', {
         id: data.id || uuidv4(),
         from: accountCode,
+        displayName: socket.displayName || null,
         payload: data.payload,
         selfDestructSeconds: data.selfDestructSeconds || null,
         ts: Date.now(),
@@ -157,10 +171,12 @@ io.on('connection', (socket) => {
     if (!data?.content || typeof data.content !== 'string') return;
     if (data.content.trim().length > 500) return;
 
-    // Broadcast WITHOUT account code
+    // Broadcast with display_name but WITHOUT account code
+    const displayName = socket.displayName || 'Ghost';
     io.emit('world_message', {
       id: uuidv4(),
       content: data.content.trim(),
+      display_name: displayName,
       ts: Date.now(),
     });
   });
